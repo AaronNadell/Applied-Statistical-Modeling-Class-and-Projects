@@ -1,0 +1,480 @@
+---
+title: "ACN Final Project"
+author: "Aaron Nadell"
+date: "5/11/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Abstract:**
+
+  In this project, I will examine the key factors that impact someone's grades in the math courses they take using the "MathPlacement" dataset. I will clean the data before using the step function to find an optimal generalized linear model to explain students' grades in the math course. The generalized linear model will explain the relationships between PSATM, Size, and Placement Scores as well as the recommended courses taken. These variables explain the probability of getting a desirable grade relatively well compared to a model that incorporates all the explanatory variables, so there is little need for more criteria to place students.   
+
+**Introduction:**
+
+  Standardized tests and GPAs are critical to college acceptance for students living in the U.S. They are used to gauge the proficiency of incoming students in most curriculae taught in American public and private schools. They are generally good representations of how well a student performs in a typical classroom setting or at the collegiate level and can be used to compare the learning and ability of students across schools. Higher scores on these standardized tests indicate better competency, and students that score better on these tests might be accepted into more selective colleges and attend harder classes. These tests as well as other characteristics of the school like class size or student rankings speak to the ability of incoming students. 
+
+  In addition to performances on standardized tests, the recommendations received from the professors about what class to take can inform a prospective student as to what grade they might hope to acheive. Direct placement testing by the college for mathematics might provide further information as to whether an incoming student is likely to succeed in a given course.
+  
+  This project seeks to analyze 13 explanatory variables using generalized linear modeling to explain whether an incoming student will achieve a satisfactory grade in the course that they chose. These variables relate to standardized tests, GPAs, class size, and recommendations. We will choose the best 4 explanatory variables that explain whether students will succeed. 
+
+**Methods:**
+
+  **Data Cleaning**
+
+  I will begin by reformatting the data so that a "B" and above is marked as a 1 to represent a successful learning experience of the incoming college student. I am marking incompletes and withdraws as a 0 because the students were likely behind on work and unable to achieve success in the class. I also removed GPAadj values of 0 because they seem to be outliers and initial GPAvalues of 0 likely mean that the adjusted GPAs might be 0. This also seems unlikely given that they would not be accepted into college with a GPA of 0. I will also be doing the same for SATM, PSATM, and ACTM as students who scored a zero likely did not try or would not be accepted into a college. 
+
+```{r, include = F}
+
+library(mosaic)
+library(dplyr)
+library(knitr)
+library(ggplot2)
+library(plyr)
+library(ggpubr)
+#install.packages("missForest")
+library(missForest)
+library(magrittr)
+#install.packages("qwraps2")
+library(qwraps2)
+options(qwraps2_markup = "markdown")
+
+Math <- read.csv("MathPlacement.csv")
+
+head(Math)
+
+#For Grade = B or better let a 1 stand as success.
+Math$Grade <- revalue(Math$Grade, c("A+"=1), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("A"=1), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("A-"=1), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("B+"=1), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("B"=1), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("S"=1), warn_missing = T)
+
+Math$Grade <- revalue(Math$Grade, c("B-"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("C+"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("C"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("C-"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("D+"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("D"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("D-"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("F"=0), warn_missing = T)
+
+
+Math$Grade <- revalue(Math$Grade, c("I"=0), warn_missing = T)
+Math$Grade <- revalue(Math$Grade, c("W"=0), warn_missing = T)
+```
+  I then imputed the data using the missForest package to quickly build a new dataset with approximated values for NAs. This package does not provide extra information about the data it only provides completion of the dataset using artificial distributions and imputing iteratively for missing values while minimizing the normalized root mean squared error. This function works automatically for continuous variables, so I was forced to remove categorical variables other than Grade like gender.
+```{r, include = F}
+
+######### Using missForest to fill in the NAs ###########
+Mathadj <- Math %>%subset(Math$GPAadj>0) %>% subset(Math$PSATM>0) %>% subset(Math$ACTM>0) %>% subset(Math$SATM>0)
+
+G1 <- Mathadj %>% subset(Grade == 1)
+G1$Grade <- as.numeric(G1$Grade) - 1
+G0 <- Mathadj %>% subset(Grade == 0)
+G0$Grade <- as.numeric(G0$Grade) - 3 
+Clean <- rbind(G1, G0)
+
+Clean1 <- subset(Clean, select = -c(3))# This is the raw data we'll use
+
+Clean.full <- na.omit(Clean1) #Gets all the values that are full
+Clean.mis <- Clean1 %>% filter_all(any_vars(is.na(.))) #gets all the values with NAs
+Clean.imp <- missForest(Clean.mis) #imputes values
+
+#Creating full dataset for logistic regression
+
+Clean.all1 <- rbind(Clean.full, as.data.frame(Clean.imp$ximp))
+random <- sample(nrow(Clean.all1), 30)
+Clean.all <- Clean.all1[-random,] #This will be the training set.
+newdata <- Clean.all1[random, ]
+newdata <- subset(newdata, select = -c(12))
+
+```
+
+```{r, include = F}
+#### Plotting Our Cleaned Data ####
+ggplot(Clean, aes(x = Gender, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="Gender", y="Grade")
+ggplot(Clean, aes(x = PSATM, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="PSATM", y="Grade")
+ggplot(Clean, aes(x = SATM, y = Grade)) + geom_point() +
+  geom_jitter(height=0.001) +
+  labs(x="SATM", y="Grade")
+ggplot(Clean, aes(x = ACTM, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="ACTM", y="Grade")
+ggplot(Clean, aes(x = Rank, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="Rank", y="Grade")
+ggplot(Clean, aes(x = Size, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="Size", y="Grade")
+ggplot(Clean, aes(x = GPAadj, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="GPAadj", y="Grade")
+ggplot(Clean, aes(x = PlcmtScore, y = Grade)) + geom_point() +    #Looks Significant
+  geom_jitter(height=0.03) +
+  labs(x="PlcmtScore", y="Grade")
+ggplot(Clean, aes(x = Recommends, y = Grade)) + geom_point() +    #Maybe Subgroup these
+  geom_jitter(height=0.03) +
+  labs(x="Recommends", y="Grade")
+ggplot(Clean, aes(x = Course, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="Course", y="Grade")
+ggplot(Clean, aes(x = RecTaken, y = Grade)) + geom_point() +
+  geom_jitter(height=0.03) +
+  labs(x="RecTaken", y="Grade")
+#Checking basic Logistic Regression Assumptions
+#1. The dependent variable is binary.
+#2. The independent variables are independent of each other.
+#3. Now we check the correlations.
+b1 <- lm(SATM~ Size, data=Clean.all)
+summary(b1)
+c <- lm(SATM~ ACTM, data=Clean.all) #Rather High Corrlation here.
+summary(c)
+d <- lm(GPAadj~ ACTM, data=Clean.all)
+summary(d)
+e <- lm(Course~ ACTM, data=Clean.all)
+summary(e)
+f <- lm(RecTaken~ ACTM, data=Clean.all)
+summary(f)
+
+g <- lm(PSATM~ ACTM, data=Clean.all) #Rather High Correlation here as well.
+summary(g)
+####Final Model Correlations ####
+h <- lm(PSATM~ Size, data=Clean.all)
+summary(h)
+i <- lm(Size~ PlcmtScore, data=Clean.all)
+summary(i)
+j <- lm(Size~ PSATM, data=Clean.all)
+summary(j)
+
+plot1 <- ggplot(Clean, aes(x = ACTM, y = SATM)) + geom_point() +
+  geom_abline(aes(intercept = c$coefficients[1], slope = c$coefficients[2])) +
+  labs(x="ACTM", y = "SATM")
+plot2 <- ggplot(Clean, aes(x = ACTM, y = PSATM)) + geom_point() +
+  geom_abline(aes(intercept = g$coefficients[1], slope = g$coefficients[2])) +
+  labs(x="ACTM", y = "PSATM")
+figure1 <- ggarrange(plot1, plot2,
+                    labels = c("A", "B"),
+                    ncol = 2, nrow = 1)
+#4. The sample size is fairly large n>300. 
+
+```
+**Results**
+
+
+```{r, include = T}
+figure1
+```
+
+**Checking Assumptions**
+
+  It appears that there is a high correlation between SATM and ACTM as well as a high correlation between ACTM and PSATM which violates a condition for logistic regression. Logistic regression requires there to be very little correlation between independent variables so it seems we should only include one of these in our final model, however all other assumptions required for generalized linear modeling are met because the dependent variable is binary, the independent variables are independent of each other, and there is a large sample size (n>300).
+```{r, include = F}
+
+ggplot(Clean.all, aes(x=SATM, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="SATM", y="P(Grade)")
+ggplot(Clean.all, aes(x=ACTM, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="ACTM", y="P(Grade)")
+ggplot(Clean.all, aes(x=Size, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="Size", y="P(Grade)")
+ggplot(Clean.all, aes(x=GPAadj, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="GPAadj", y="P(Grade)")
+ggplot(Clean.all, aes(x=Course, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="Course", y="P(Grade)")
+ggplot(Clean.all, aes(x=RecTaken, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="RecTaken", y="P(Grade)")
+ggplot(Clean.all, aes(x=Recommends, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="RecTaken", y="P(Grade)")
+
+
+Best <- step(glm(Grade~PSATM + SATM + ACTM + Rank + Size + GPAadj + PlcmtScore + Recommends + Course + RecTaken, family = binomial, Clean.all), direction = "backward")
+
+My.Model.missForest <- glm(Grade ~PSATM + Size + PlcmtScore + Recommends, data = Clean.all)
+summary(My.Model.missForest)
+
+hist(My.Model.missForest$residuals)
+
+predictlogodds <- predict(My.Model.missForest, newdata)
+validation <- Clean.all1[random, ]
+sum(as.vector(round(predictlogodds)) - validation$Grade == 0) #Checks how many times the model got it right out of 30
+
+Test20 <-subset(Clean, select =c(-13))
+predictlogodds <- predict(My.Model.missForest, Test20)
+sum(na.omit(as.vector(round(predictlogodds)) - Clean$Grade == 0)) #outputs how many the model got right
+length(na.omit(as.vector(round(predictlogodds)) - Clean$Grade)) #outputs total sample size
+```
+
+```{r, include= F}
+##### filling in the NAs using the column means ######
+My.Model.mean <- Clean
+
+PSATM.mean <- mean(Clean$PSATM, na.rm=TRUE)
+My.Model.mean$PSATM[is.na(Clean$PSATM)] = PSATM.mean
+
+SATM.mean <- mean(Clean$SATM, na.rm=TRUE)
+My.Model.mean$SATM[is.na(Clean$SATM)] = SATM.mean
+
+ACTM.mean <- mean(Clean$ACTM, na.rm=TRUE)
+My.Model.mean$ACTM[is.na(Clean$ACTM)] = ACTM.mean
+
+Rank.mean <- mean(Clean$Rank, na.rm=TRUE)
+My.Model.mean$Rank[is.na(Clean$Rank)] = Rank.mean
+
+Size.mean <- mean(Clean$Size, na.rm=TRUE)
+My.Model.mean$Size[is.na(Clean$Size)] = Size.mean
+
+GPAadj.mean <- mean(Clean$GPAadj, na.rm=TRUE)
+My.Model.mean$GPAadj[is.na(Clean$GPAadj)] = GPAadj.mean
+
+PlcmtScore.mean <- mean(Clean$PlcmtScore, na.rm=TRUE)
+My.Model.mean$PlcmtScore[is.na(Clean$PlcmtScore)] = PlcmtScore.mean
+
+My.Model.mean <- subset(My.Model.mean, select = c(-3)) 
+
+random1 <- sample(nrow(My.Model.mean), 30)
+training <- My.Model.mean[-random1, ]
+newdata1 <- My.Model.mean[random1, ]
+
+
+
+Best1 <- step(glm(Grade~PSATM + SATM + ACTM + Rank + Size + GPAadj + PlcmtScore + Recommends + Course + RecTaken, family = binomial, training), direction = "backward")
+
+My.glmModel.mean <- glm(Grade ~ PSATM + Size + PlcmtScore + Recommends, data = training)
+summary(My.Model.missForest)
+
+Test20 <-subset(Clean, select =c(-13))
+predictlogodds1 <- predict(My.glmModel.mean, Test20)
+sum(na.omit(as.vector(round(predictlogodds1)) - Clean$Grade == 0)) #outputs how many the model got right
+length(na.omit(as.vector(round(predictlogodds1)) - Clean$Grade)) #outputs total sample size
+
+```
+
+```{r, include = F}
+### Creating Summary Table of our findings so far. ###
+missForestAICs <- c(317.46, 318.60, 334.98,339.88)
+meanReplacementAICs <- c(314.41, 316.08, 326.89, 331.08)
+missForestDeviance <- c(317.46,318.60,334.98,339.88)
+meanReplacementDeviance <- c(314.41,316.08,326.89,331.08)
+Results <- data_frame(missForestAICs,meanReplacementAICs,missForestDeviance,meanReplacementDeviance)
+AICs <-
+  list("missForest AICs " =
+       list("Total:" = ~ 318.81,
+              "SATM" = ~ Results$missForestAICs[1],
+            "Rank" = ~ Results$missForestAICs[2],
+            "Placement Score" = ~ Results$missForestAICs[3],
+            "Recommends" = ~ Results$missForestAICs[4]),
+      "mean replacement AICs" =
+        list("Total:" = ~ 313.65,
+          "PSATM" = ~ Results$meanReplacementAICs[1],
+            "Size" = ~ Results$meanReplacementAICs[2],
+            "Placement Score" = ~ Results$meanReplacementAICs[3],
+            "Recommends" = ~ Results$meanReplacementAICs[4]),
+      "Deviances for missForest"=
+         list("SATM" = ~ 317.46,
+            "Rank" = ~ 318.60,
+            "Placement Score" = ~ 334.98,
+            "Recommends" = ~ 339.88),
+      "Mean Replacement Deviances"=
+        list("PSATM" = ~ 294.41,
+            "Size" = ~ 296.08,
+            "Placement Score" = ~ 306.89,
+            "Recommends" = ~ 323.08)
+      )
+Table1<- summary_table(Results, AICs) 
+
+```
+
+```{r, include = F}
+exp(confint(My.Model.missForest,"PSATM"))
+exp(confint(My.Model.missForest, "Size"))
+exp(confint(My.Model.missForest, "PlcmtScore"))
+exp(confint(My.Model.missForest, "RecommendsR01"))
+exp(confint(My.Model.missForest, "RecommendsR1"))
+exp(confint(My.Model.missForest, "RecommendsR12"))
+exp(confint(My.Model.missForest, "RecommendsR2"))
+exp(confint(My.Model.missForest, "RecommendsR3"))
+exp(confint(My.Model.missForest, "RecommendsR4"))
+exp(confint(My.Model.missForest, "RecommendsR8"))
+
+
+Model <- c(rep("missForest Model" , 2) , rep("Mean Replacement Model" , 2))
+condition <- rep(c("Correct" , "Failed") , 2)
+value <- c(108, 32, 109, 31)
+data <- data.frame(Model,condition,value)
+
+###Likelihood Ratio Test###
+Full.Model <- glm(Grade ~ PSATM + Size + PlcmtScore + Recommends + Gender + Student + SATM + ACTM + Rank + GPAadj + Course + RecTaken, data = Clean)
+summary(Full.Model)
+
+diff1 <- 1.78947 - 0.27693
+df1 <- 18 - 4
+1-pchisq(diff1, df1)
+
+My.Model.missForest <- glm(Grade ~PSATM + Size + PlcmtScore + Recommends, data = Clean.all)
+summary(My.Model.missForest)
+
+diff<- 64.887 - 48.398
+df <- 292 - 282
+1 - pchisq(diff, df)
+
+
+My.Model.missForest.interactions <- glm(Grade ~PSATM + Size + PlcmtScore + Recommends + Size*PlcmtScore, data = Clean.all)
+summary(My.Model.missForest.interactions) #I went through all of the interactions individually by replacing the interaction term by hand and found no sign. interactions between any of the variables.
+
+```
+
+To compare the quality of my missForest model, I also created a separate dataframe and replaced the NA values with the means for the continuous variables, but I removed the NA values for the categorical variables.
+```{r, echo = F}
+# Stacked
+ggplot(data, aes(fill=condition, y=value, x=Model)) + 
+    geom_bar(position="stack", stat="identity")
+
+```
+
+This barplot shows how each of the models performed on the Clean dataset. I'm partial to the missForest model because eventhough it was trained on the dataset created by the missForest function it was able to predict comparably to the mean Replacement method on the Clean dataset. 
+
+```{r, include = T}
+Table1
+```
+
+As we can see in the missForest Model the four explanatory variables that best explain whether or not a grade was satisfactory were PSATM, Size, PlcmtScore, and Recommends. It appears that the log(odds) of a satisfactory grade change by  5.848e-03 for each point higher on the PSATM in relation to the other variables within the model. The log(odds) of a satisfactory grade change by 5.211e-04 for each point higher on the Size in relation to the other variables within the model, and the log(odds) of a satisfactory grade change by 2.531e-02 for each point higher on the Placement Score in relation to the other variables within the model. The Likelihood ratio test (LRT) for the full model showed a p-value of 0.9999 which provides very weak evidence of a relationship between the explanatory variable and the odds of obtaining a satisfactory grade. However, the missForest Model yielded a p-value of 0.0865 which provides a moderate relationship between a satisfactory grade and our four variables.
+
+  When we subdivide the data based on the recommends we get the following AICs, and different coefficients.
+
+```{r, include = F}
+RO1 <- subset(Clean, Recommends == "R01")
+My.Model.missForestRO1 <- glm(Grade ~PSATM + Size + PlcmtScore, data = RO1)
+summary(My.Model.missForestRO1)
+
+R12 <- subset(Clean, Recommends == "R12")
+My.Model.missForestR12 <- glm(Grade ~PSATM + Size + PlcmtScore, data = R12)
+summary(My.Model.missForestR12)
+
+R2 <- subset(Clean, Recommends == "R2")
+My.Model.missForestR2 <- glm(Grade ~PSATM + Size + PlcmtScore, data = R2)
+summary(My.Model.missForestR2)
+
+R4 <- subset(Clean, Recommends == "R4")
+My.Model.missForestR4 <- glm(Grade ~PSATM + Size + PlcmtScore, data = R4)
+summary(My.Model.missForestR4)
+
+R6 <- subset(Clean, Recommends == "R12")
+My.Model.missForestR6 <- glm(Grade ~PSATM + Size + PlcmtScore, data = R6)
+summary(My.Model.missForestR6)
+
+R8 <- subset(Clean, Recommends == "R8")
+My.Model.missForestR8 <- glm(Grade ~PSATM + Size + PlcmtScore, data = R8)
+summary(My.Model.missForestR8)
+
+RecAICs <-
+  list("R01 AIC " =
+       list("AIC" = ~ 8.6686),
+      "R12 AIC" =
+        list("AIC" = ~ 21.282),
+      "R2 AIC" =
+        list("AIC" = ~ 34.032),
+      "R4 AIC" =
+        list("AIC" = ~ 9.0036),
+      "R6 AIC" =
+        list("AIC" = ~ 21.282),
+      "R8 AIC" =
+        list("AIC" = ~ 14.462)#,
+      #"R01 LRT " =
+      # list("LRT" = ~ 1-pchisq((1.2-.22431),3)),
+      #"R12 LRT" =
+      #  list("LRT" = ~ 1-pchisq((2.2222-1.8457),3)),
+      #"R2 LRT" =
+      #  list("LRT" = ~ 1-pchisq((4.3902-4.3139),3)),
+      #"R4 LRT" =
+      #  list("LRT" = ~ 1-pchisq((0.90909-.58827),3)),
+      #"R6 LRT" =
+      #  list("AIC" = ~ 1-pchisq((2.2222-1.8457),3)),
+      #"R8 LRT" =
+      #  list("LRT" = ~ 1-pchisq((1.8182-1.5777),3))
+      )
+
+      
+      
+Table2<- summary_table(Results, RecAICs) 
+
+### Confidence intervals for subdivided models. 
+exp(confint(My.Model.missForestRO1))
+exp(confint(My.Model.missForestR12))
+exp(confint(My.Model.missForestR2))
+exp(confint(My.Model.missForestR4))
+exp(confint(My.Model.missForestR6))
+exp(confint(My.Model.missForestR8))
+
+```
+
+```{r, include = T}
+Table2
+
+```
+
+```{r, include = F}
+##### HereI determine whether taking the recommended course increases the odds of getting a satisfactory grade####
+Rectaken1 <- Clean.all1 %>% subset(Recommends = 1)
+Rectaken0 <- Clean.all1 %>% subset(Recommends = 0)
+
+RecommendModel <- glm(Grade ~ RecTaken, data = Clean.all1)
+summary(RecommendModel)
+
+ggplot(Clean.all, aes(x=RecTaken, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="RecTaken", y="P(Grade)")
+
+```
+
+```{r, echo = F}
+ggplot(Clean.all, aes(x=RecTaken, y=Grade)) + geom_point() +
+ geom_jitter(height=0.03) +
+ stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE) +
+ labs(x="RecTaken", y="P(Grade)")
+```
+
+We can see in this graph that taking the recommended course improves the probability of achieving a satisfactory grade with the p-value of 0.0348, however it has an LRT value of 0.319. This indicates that while it does some explaining in the model, it is not enough to prove a relationship between Grade and RecTaken.
+
+**Discussion:**
+
+  In the unsubdivided models of the missForest Model, we obtained different coefficients. What this means is that the odds of obtaining a satisfactory grade change based on what courses were recommended to the incoming students. The 95% confidence intervals for R01, R12, R4, R6 and R8 are wide enough as to be uncertain whether PSATM, Size, and PlcmtScore are reliably increasing or decreasing the odds of obtaining a satisfactory grade. The values of the coefficients in these models are highly dependent on what the values of the other variables are doing. In the R2 model, the odds of being accepted is a 1.1 to 15.5 times higher with each point increase in PSATM with respect to the other variables Size and PlcmtScore.
+  
+  **Limitations:** 
+  
+  The ability of standardized testing to measure how well a student performs limits this study because certain students might take one test and not the other which limits the completeness of this dataset. Additionally, students might be stressed out by standardized tests and perform better own low-stress assignments like homework or a simple placement test. There were also many blank entries for the Grades in this dataset which limit the information provided.
+  
+**Conclusions:**
+
+I was able to create a model that provided a strong relationship between Size, PSATM, Recommended, and Rank to determine what course a student should take. The successful predictions of the model suggest that we have sufficient criteria to predict what courses incoming students should take. There was also little evidence to support that taking the recommended course improves the chances of obtaining a satisfactory grade. The results of this study might improve the placement of incoming freshman by allowing colleges to focus on the criteria that best predict their student's success.
+
+**References:**
+
+Stekhoven DJ. Using the missForest Package. 2011. https://stat.ethz.ch/education/semesters/ss2012/ams/paper/missForest_1.2.pdf
+
+
+
